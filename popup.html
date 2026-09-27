@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>LinkedIn Profile Extractor</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Profile Extractor</h1>
+      <span id="count" class="count">0</span>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="single">Onglet actif</button>
+      <button class="tab" data-tab="batch">Liste</button>
+    </nav>
+
+    <section id="panel-single" class="panel">
+      <button id="extract" class="primary">Extraire ce profil</button>
+      <label class="check">
+        <input type="checkbox" id="deep" checked />
+        Historique complet (charge les pages /details/)
+      </label>
+      <button id="diagnose">Diagnostic (copie un rapport)</button>
+      <textarea id="report" rows="8" class="is-hidden" readonly></textarea>
+    </section>
+
+    <section id="panel-batch" class="panel is-hidden">
+      <textarea
+        id="urls"
+        rows="5"
+        placeholder="https://www.linkedin.com/in/exemple-un/&#10;https://www.linkedin.com/in/exemple-deux/"
+      ></textarea>
+      <label class="check">
+        Pause entre profils
+        <select id="delay">
+          <option value="8000">8 s</option>
+          <option value="12000" selected>12 s</option>
+          <option value="25000">25 s</option>
+          <option value="60000">60 s</option>
+        </select>
+      </label>
+      <button id="run-batch" class="primary">Lancer</button>
+      <p class="warn">
+        Le traitement en masse est detectable par LinkedIn et peut faire restreindre ton compte.
+        Reste sur de petits volumes.
+      </p>
+    </section>
+
+    <p id="message" class="message is-hidden"></p>
+
+    <section class="results">
+      <div id="list" class="list"></div>
+      <div class="actions">
+        <button id="copy-json">Copier</button>
+        <button id="export-json">JSON</button>
+        <button id="export-csv">CSV</button>
+        <button id="clear" class="danger">Vider</button>
+      </div>
+    </section>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
