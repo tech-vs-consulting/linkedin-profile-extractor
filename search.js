@@ -222,6 +222,9 @@ function totalResults() {
 
 const pageNumber = () => Number(new URLSearchParams(location.search).get('page')) || 1;
 
+// LinkedIn lists 10 people per results page.
+const FULL_PAGE = 10;
+
 // Out-of-network members: LinkedIn replaces the name with "Utilisateur
 // LinkedIn" and gives the card no /in/ link at all (it points back to the
 // search). They cannot be invited or messaged, so they are counted, not kept.
@@ -237,11 +240,6 @@ function hiddenProfiles(root = document.querySelector('main') ?? document.body) 
   return count;
 }
 
-const currentResults = () => {
-  const fromVoyager = voyagerResults();
-  return fromVoyager.length ? fromVoyager : domResults();
-};
-
 // `page` is the page the worker navigated to: answering from the previous
 // document (navigation not committed yet) would re-read the wrong results.
 async function readSearchPage({ timeoutMs = 25_000, page } = {}) {
@@ -256,7 +254,22 @@ async function readSearchPage({ timeoutMs = 25_000, page } = {}) {
   // Cards first, verdicts second: "Aucun résultat" can also appear in a filter
   // dropdown of a page that does list people.
   while (Date.now() < deadline) {
-    results = currentResults();
+    // LinkedIn's data holds a full page at once, photos included: no need to
+    // wait for the cards to render or to scroll for lazy images.
+    const fromVoyager = voyagerResults();
+    if (fromVoyager.length >= FULL_PAGE) {
+      return {
+        ok: true,
+        state: 'ok',
+        results: fromVoyager,
+        hidden: hiddenProfiles(),
+        total: totalResults(),
+        source: 'voyager',
+        url: location.href,
+      };
+    }
+
+    results = fromVoyager.length ? fromVoyager : domResults();
     if (results.length + hiddenProfiles() >= 3) break;
 
     const state = pageState();

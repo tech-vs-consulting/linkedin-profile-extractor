@@ -96,6 +96,10 @@ export function editProspect(slug, patch) {
   return update('prospects', slug, (current) => (current ? touch({ ...current, ...patch }) : null));
 }
 
+// LinkedIn photo URLs carry a signed, expiring token (?e=…&t=…) that changes
+// from one search to the next: the same picture is the same path.
+export const photoKey = (url) => String(url ?? '').split('?')[0];
+
 // A search hit. A known person keeps their status, notes and campaign; only the
 // card fields are refreshed, and only when they actually changed.
 export function upsertFound(card, campaignId) {
@@ -118,11 +122,14 @@ export function upsertFound(card, campaignId) {
       });
     }
     const fields = ['name', 'firstName', 'headline', 'company', 'location', 'photo', 'degree'];
-    const changed = fields.some((f) => card[f] && card[f] !== current[f]);
-    if (!changed) return null;
+    const same = (f) => (f === 'photo' ? photoKey(card[f]) === photoKey(current[f]) : card[f] === current[f]);
+    const changed = fields.some((f) => card[f] && !same(f));
     const merged = { ...current };
     for (const f of fields) if (card[f]) merged[f] = card[f];
-    return touch(merged);
+    if (changed) return touch(merged);
+    // Only a fresher photo token: keep the picture loading in the dashboard,
+    // without marking the row for a Notion push.
+    return card.photo && card.photo !== current.photo ? merged : null;
   }).then(() => added);
 }
 

@@ -219,6 +219,21 @@ function propertiesFor(prospect, settings, campaigns) {
   return properties;
 }
 
+// What a push would write, minus the photo's expiring token. Equal to the
+// last successful push's → the Notion row already says exactly this.
+function fingerprint(properties) {
+  const text = JSON.stringify(properties, (_key, value) =>
+    typeof value === 'string' && /media\.licdn\.com/.test(value) ? db.photoKey(value) : value
+  );
+  // FNV-1a: short, stable, plenty to tell two versions of one row apart.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 // The profile part of a LinkedIn URL, decoded: search stores "maria-tébar",
 // the URL written to Notion reads "maria-t%C3%A9bar".
 function slugOfUrl(url) {
@@ -293,7 +308,13 @@ async function pull(settings) {
       remote[field.key] = decode(page.properties[name]);
     }
 
-    await db.update('prospects', slug, (local) => {
+    await db.update('prospects', slug, (found) => {
+      // Edited in Notion after our last push (or another page): the row no
+      // longer holds what that push wrote, so the next push must not be skipped.
+      const stale =
+        found?.notionHash &&
+        (found.notionPageId !== page.id || !(Date.parse(page.last_edited_time) <= Date.parse(found.syncedAt)));
+      const local = stale ? { ...found, notionHash: null } : found;
       if (!local) {
         // Added by hand in Notion: import it so the dashboard sees it.
         imported += 1;
@@ -325,7 +346,7 @@ async function pull(settings) {
       // the first link though: a row found again by a search is "Nouveau"
       // locally, while Notion holds the real follow-up (Invité, A répondu...).
       if (local.notionPageId && local.dirty && Date.parse(local.updatedAt) > Date.parse(page.last_edited_time)) {
-        return local.notionPageId === page.id ? null : { ...local, notionPageId: page.id };
+        return local.notionPageId === page.id && !stale ? null : { ...local, notionPageId: page.id };
       }
 
       const next = { ...local, notionPageId: page.id };
@@ -341,7 +362,7 @@ async function pull(settings) {
           changed = true;
         }
       }
-      if (!changed) return null;
+      if (!changed) return stale ? next : null;
       updated += 1;
       return next;
     });
@@ -366,10 +387,11 @@ async function push(settings, onProgress) {
   }
 
   let pushed = 0;
+  let unchanged = 0; // dirty locally, already identical in Notion
   const errors = [];
 
   for (let prospect of dirty) {
-    onProgress?.(pushed, dirty.length);
+    onProgress?.(pushed + unchanged, dirty.length);
     const existing = prospect.notionPageId ? null : byUrlSlug?.get(sameKey(prospect.slug));
     if (existing) {
       // Already in Notion: take its follow-up fields before pushing, so the
@@ -380,7 +402,19 @@ async function push(settings, onProgress) {
       if (!prospect) continue;
     }
     const properties = propertiesFor(prospect, settings, campaigns);
+    const hash = fingerprint(properties);
     let pageId = prospect.notionPageId ?? existing?.id ?? null;
+    const snapshot = prospect.updatedAt;
+
+    // Touched locally but nothing Notion shows changed (a field that is not
+    // synced, a photo token): no request, just clear the flag.
+    if (prospect.notionPageId && prospect.notionHash === hash) {
+      await db.update('prospects', prospect.slug, (current) =>
+        current && current.updatedAt === snapshot ? { ...current, dirty: false } : null
+      );
+      unchanged += 1;
+      continue;
+    }
 
     try {
       if (pageId) {
@@ -400,12 +434,17 @@ async function push(settings, onProgress) {
         pageId = page.id;
       }
 
-      const snapshot = prospect.updatedAt;
       await db.update('prospects', prospect.slug, (current) => {
         if (!current) return null;
         // Edited again while the request was in flight: keep it dirty.
         const stillSame = current.updatedAt === snapshot;
-        return { ...current, notionPageId: pageId, dirty: !stillSame, syncedAt: new Date().toISOString() };
+        return {
+          ...current,
+          notionPageId: pageId,
+          notionHash: hash,
+          dirty: !stillSame,
+          syncedAt: new Date().toISOString(),
+        };
       });
       pushed += 1;
     } catch (error) {
@@ -415,7 +454,7 @@ async function push(settings, onProgress) {
     }
   }
 
-  return { pushed, errors };
+  return { pushed, unchanged, errors };
 }
 
 export async function sync(onProgress) {

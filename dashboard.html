@@ -27,6 +27,7 @@
       <progress id="job-progress" max="1" value="0"></progress>
       <span id="job-detail" class="muted"></span>
       <button id="job-stop">Arrêter</button>
+      <button id="job-close" class="link" title="Fermer" aria-label="Fermer">×</button>
     </div>
 
     <p id="message" class="message is-hidden"></p>
@@ -217,8 +218,8 @@
             </label>
 
             <div class="row">
-              <label>Pages max <small>10 résultats par page</small>
-                <input id="c-pages" type="number" min="1" max="1000" value="10" />
+              <label>Pages max <small>10 résultats par page, 100 pages au plus (limite LinkedIn)</small>
+                <input id="c-pages" type="number" min="1" max="100" value="10" />
               </label>
               <label>Pause entre pages
                 <select id="c-delay">

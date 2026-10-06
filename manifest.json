@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Profile Extractor",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Recherche de prospects LinkedIn par campagne, extraction de profils, dashboard et synchronisation Notion.",
   "minimum_chrome_version": "111",
   "permissions": ["tabs", "storage", "scripting", "alarms", "unlimitedStorage"],

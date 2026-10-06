@@ -29,6 +29,7 @@ let job = null;
 let syncing = false;
 
 async function exclusive(kind, fn) {
+  await recovered;
   if (job) throw new Error('Un traitement est déjà en cours.');
   job = { kind, stop: false };
   keepAlive(true);
@@ -47,6 +48,34 @@ async function setStatus(status) {
 }
 
 const dataChanged = () => chrome.runtime.sendMessage({ type: 'LPE_DATA_CHANGED' }).catch(() => {});
+
+// A job lives in this worker's memory only. If the browser slept, crashed or
+// reloaded the extension mid-job, a fresh worker finds a "running" status that
+// nothing will ever finish: settle it, and record where a search can resume.
+const recovered = (async () => {
+  const { status } = await chrome.storage.local.get('status');
+  if (!status?.running) return;
+
+  const page = (status.done ?? 0) + 1;
+  const end =
+    status.kind === 'search'
+      ? `Interrompue pendant la page ${page} (navigateur fermé, mis en veille ou extension rechargée).`
+      : 'Interrompu (navigateur fermé, mis en veille ou extension rechargée).';
+  const stats = status.stats
+    ? { ...status.stats, pages: status.done ?? 0, stoppedBy: end, end, resumePage: page }
+    : status.stats;
+
+  if (status.kind === 'search' && status.campaignId) {
+    await db
+      .update('campaigns', status.campaignId, (c) =>
+        c ? { ...c, lastRun: { at: new Date().toISOString(), ...stats, error: null, debug: null } } : null
+      )
+      .catch(() => {});
+  }
+  // A search shows `stats.stoppedBy`; other jobs only have an error list.
+  const errors = status.kind === 'search' ? status.errors ?? [] : [...(status.errors ?? []), { url: '', error: end }];
+  await setStatus({ ...status, running: false, stats, errors });
+})().catch(() => {});
 
 // A constant interval is exactly what rate limiters look for; slow beats
 // getting the account restricted.
@@ -365,6 +394,10 @@ const STOP_REASONS = {
 
 const HIDDEN_STREAK_MAX = 3;
 
+// LinkedIn never serves people results past page 100 (about 1,000 people),
+// whatever total it announces: asking for page 101 only burns a request.
+const LINKEDIN_MAX_PAGES = 100;
+
 const pageOf = (url) => {
   try {
     return Number(new URL(url).searchParams.get('page')) || 1;
@@ -404,12 +437,15 @@ async function openSearchPage(tab, url, page, timeoutMs = 45_000) {
   return tab;
 }
 
-function runSearch(campaignId) {
+// `startPage` resumes a run that was cut short (stopped, interrupted, failed
+// page): results shift over time, so it is only offered for a recent run.
+function runSearch(campaignId, startPage = 1) {
   return exclusive('search', async (current) => {
     const campaign = await db.get('campaigns', campaignId);
     if (!campaign) throw new Error('Campagne introuvable.');
 
-    const maxPages = Math.min(Math.max(Number(campaign.maxPages) || 10, 1), 1000);
+    const maxPages = Math.min(Math.max(Number(campaign.maxPages) || 10, 1), LINKEDIN_MAX_PAGES);
+    const firstPage = Math.min(Math.max(Number(startPage) || 1, 1), maxPages);
     const stats = {
       pages: 0,
       seen: 0,
@@ -420,14 +456,19 @@ function runSearch(campaignId) {
       place: 0, // skipped because located outside the typed places
       hidden: 0, // anonymised out-of-network members, not stored
       total: null,
+      startPage: firstPage,
       stoppedBy: null, // abnormal stop, shown as a warning
       end: null, // why the run ended, always set
+      resumePage: null, // first unread page when the run was cut short
     };
     const errors = [];
     const label = `Recherche « ${campaign.name} »`;
+    // campaignId lets a worker restart record where a dead run stopped.
+    const status = (running) => ({ running, kind: 'search', campaignId, label, total: maxPages, stats });
     let tab = null;
     let debug = null; // snapshot of the last page that yielded no card
     let hiddenStreak = 0;
+    let page = firstPage;
 
     // One page, up to two attempts: a page that has not rendered yet or a
     // slow navigation must not be mistaken for the end of the results.
@@ -438,7 +479,8 @@ function runSearch(campaignId) {
       for (let attempt = 1; attempt <= 2 && !current.stop; attempt += 1) {
         try {
           tab = await openSearchPage(tab, searchUrl(campaign, page), page);
-          await sleep(2500);
+          // The reader polls until the cards are there: no long fixed wait.
+          await sleep(500);
           await ensureContentScript(tab.id);
           const result = await chrome.tabs.sendMessage(tab.id, { type: 'LPE_SEARCH_PAGE', options: { page } });
           if (!result?.ok) throw new Error(result?.error ?? 'pas de réponse du content script.');
@@ -458,17 +500,22 @@ function runSearch(campaignId) {
       return empty ? { result: empty } : { problem };
     }
 
+    const stopHere = () => {
+      stats.end = 'Arrêtée à la demande.';
+      stats.resumePage = page;
+    };
+
     try {
-      for (let page = 1; page <= maxPages; page += 1) {
+      for (; page <= maxPages; page += 1) {
         if (current.stop) {
-          stats.end = 'Arrêtée à la demande.';
+          stopHere();
           break;
         }
-        await setStatus({ running: true, kind: 'search', label, done: page - 1, total: maxPages, stats });
+        await setStatus({ ...status(true), done: page - 1 });
 
         const { result, problem } = await readPage(page);
         if (current.stop && !result) {
-          stats.end = 'Arrêtée à la demande.';
+          stopHere();
           break;
         }
 
@@ -481,12 +528,14 @@ function runSearch(campaignId) {
           } else {
             stats.stoppedBy = `Page ${page} : ${problem}`;
             stats.end = stats.stoppedBy;
+            stats.resumePage = page;
           }
           break;
         }
         if (STOP_REASONS[result.state]) {
           stats.stoppedBy = STOP_REASONS[result.state];
           stats.end = stats.stoppedBy;
+          stats.resumePage = page;
           break;
         }
         if (!result.results.length && !result.hidden) {
@@ -520,12 +569,18 @@ function runSearch(campaignId) {
         }
         dataChanged();
 
-        if (page === maxPages) stats.end = `Nombre de pages max atteint (${maxPages}).`;
-        else if (!current.stop) await jitter(Number(campaign.delayMs) || 15_000);
+        if (page === maxPages) {
+          const moreOnLinkedIn = maxPages === LINKEDIN_MAX_PAGES && (!stats.total || stats.total > maxPages * 10);
+          stats.end = moreOnLinkedIn
+            ? `Limite LinkedIn atteinte : ${LINKEDIN_MAX_PAGES} pages (≈ 1 000 résultats) au maximum par recherche. ` +
+              'Pour aller plus loin, découpe la campagne (par lieu, titre, secteur…).'
+            : `Nombre de pages max atteint (${maxPages}).`;
+        } else if (!current.stop) await jitter(Number(campaign.delayMs) || 15_000);
       }
     } catch (error) {
       errors.push({ url: '', error: errorText(error) });
       stats.end = `Erreur : ${errorText(error)}`;
+      stats.resumePage = page;
     } finally {
       if (tab) chrome.tabs.remove(tab.id).catch(() => {});
       await db.update('campaigns', campaign.id, (c) =>
@@ -541,7 +596,7 @@ function runSearch(campaignId) {
             }
           : null
       );
-      await setStatus({ running: false, kind: 'search', label, done: stats.pages, total: maxPages, stats, errors });
+      await setStatus({ ...status(false), done: stats.pages, errors });
       dataChanged();
     }
 
@@ -903,13 +958,21 @@ const handlers = {
     );
   },
 
-  async LPE_SEARCH_RUN({ campaignId }) {
-    return runSearch(campaignId);
+  async LPE_SEARCH_RUN({ campaignId, startPage }) {
+    return runSearch(campaignId, startPage);
   },
 
   async LPE_JOB_STOP() {
+    await recovered;
     if (job) job.stop = true;
     return { stopping: Boolean(job) };
+  },
+
+  // Sent by the dashboard when it finds a "running" status: waking the worker
+  // is enough to settle a run that died with the previous worker.
+  async LPE_JOB_CHECK() {
+    await recovered;
+    return { running: Boolean(job) };
   },
 
   async LPE_OUTREACH_START(message, sender) {

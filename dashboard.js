@@ -8,6 +8,11 @@ import * as seq from './sequence.js';
 const $ = (id) => document.getElementById(id);
 const send = (message) => chrome.runtime.sendMessage(message);
 const PAGE_SIZE = 100;
+// LinkedIn serves 100 pages of people results at most (about 1,000 people).
+const LINKEDIN_MAX_PAGES = 100;
+// Results shift as the network and profiles change: past a day, resuming at
+// page N would skip people who moved into the first pages.
+const RESUME_MAX_AGE_MS = 24 * 3600_000;
 
 // Statuses that mean "we just reached out": setting one stamps the date.
 const CONTACT_STATUSES = new Set(['Invité', 'Message envoyé', 'Relancé']);
@@ -559,6 +564,7 @@ function renderJob(status = state.job) {
   $('job-progress').max = status.total || 1;
   $('job-progress').value = status.done ?? 0;
   $('job-stop').classList.toggle('is-hidden', !status.running);
+  $('job-close').classList.toggle('is-hidden', Boolean(status.running));
 
   const s = status.stats;
   const parts = [];
@@ -584,6 +590,14 @@ function renderJob(status = state.job) {
 /* ------------------------------------------------------------------ *
  * Campaigns
  * ------------------------------------------------------------------ */
+
+// A run cut short today can pick up where it stopped; an older one cannot
+// (see RESUME_MAX_AGE_MS), and a full rerun starts from page 1 anyway.
+function resumable(c) {
+  const run = c.lastRun;
+  if (!run?.resumePage || run.resumePage > Math.min(c.maxPages || 10, LINKEDIN_MAX_PAGES)) return false;
+  return Date.now() - Date.parse(run.at) < RESUME_MAX_AGE_MS;
+}
 
 function campaignCard(c) {
   const mine = state.prospects.filter((p) => p.campaignId === c.id);
@@ -643,6 +657,13 @@ function campaignCard(c) {
       'div',
       { class: 'actions' },
       h('button', { class: 'primary', 'data-run': c.id, onclick: () => runCampaign(c.id) }, 'Lancer la recherche'),
+      resumable(c)
+        ? h(
+            'button',
+            { 'data-run': c.id, onclick: () => runCampaign(c.id, run.resumePage) },
+            `Reprendre à la page ${run.resumePage}`
+          )
+        : null,
       h('button', { onclick: () => editCampaign(c) }, 'Modifier'),
       h(
         'button',
@@ -702,7 +723,7 @@ function editCampaign(c = null) {
   $('c-places-kw').checked = c?.placesInKeywords !== false;
   $('c-from-tab-status').classList.add('is-hidden');
   $('c-extra').value = c?.extraParams ?? '';
-  $('c-pages').value = c?.maxPages ?? 10;
+  $('c-pages').value = Math.min(c?.maxPages ?? 10, LINKEDIN_MAX_PAGES);
   $('c-delay').value = String(c?.delayMs ?? 15000);
   // New campaigns default to the stricter, more useful settings.
   $('c-require-current').checked = c ? Boolean(c.requireCurrent) : true;
@@ -740,7 +761,7 @@ function formCampaign() {
     places: lines($('c-places').value),
     placesInKeywords: $('c-places-kw').checked,
     extraParams: $('c-extra').value.trim().replace(/^[?&]/, ''),
-    maxPages: Math.min(Math.max(Number($('c-pages').value) || 10, 1), 1000),
+    maxPages: Math.min(Math.max(Number($('c-pages').value) || 10, 1), LINKEDIN_MAX_PAGES),
     delayMs: Number($('c-delay').value) || 15000,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
   };
@@ -774,9 +795,9 @@ async function deleteCampaign(c) {
   await refresh();
 }
 
-function runCampaign(id) {
+function runCampaign(id, startPage = 1) {
   notify('');
-  send({ type: 'LPE_SEARCH_RUN', campaignId: id }).then((result) => {
+  send({ type: 'LPE_SEARCH_RUN', campaignId: id, startPage }).then((result) => {
     if (result && !result.ok) notify(result.error, true);
   });
 }
@@ -1140,6 +1161,7 @@ async function syncNow() {
   const { result } = await ask({ type: 'LPE_NOTION_SYNC' });
   const parts = [`${result.pushed} envoyé(s)`, `${result.updated} mis à jour depuis Notion`];
   if (result.imported) parts.push(`${result.imported} importé(s) depuis Notion`);
+  if (result.unchanged) parts.push(`${result.unchanged} déjà à jour (non renvoyé(s))`);
   if (result.errors.length) parts.push(`${result.errors.length} erreur(s) : ${result.errors[0].error}`);
   notify(`Notion : ${parts.join(', ')}.`, result.errors.length > 0);
   await refresh();
@@ -1755,6 +1777,8 @@ $('job-stop').addEventListener('click', () => {
   $('job-detail').textContent = 'Arrêt après la page en cours…';
 });
 
+$('job-close').addEventListener('click', () => renderJob(null));
+
 $('n-test').addEventListener('click', (e) =>
   withButton(e.target, async () => {
     const { bot } = await ask({ type: 'LPE_NOTION_TEST', token: $('n-token').value.trim() });
@@ -1838,5 +1862,9 @@ try {
 }
 switchTab(initialTab);
 const { status } = await chrome.storage.local.get('status');
-if (status?.running) renderJob(status);
+if (status?.running) {
+  renderJob(status);
+  // Wakes the worker: a run that died with it is then settled and broadcast.
+  send({ type: 'LPE_JOB_CHECK' }).catch(() => {});
+}
 setInterval(renderSyncInfo, 60_000);
