@@ -45,9 +45,16 @@ header {
 }
 
 h1 {
+  flex: 1;
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+}
+
+.small {
+  margin-left: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .count {

@@ -28,6 +28,90 @@ ferme l'onglet, attend, passe au suivant.
 Les résultats s'accumulent dans `chrome.storage.local` et sont dédupliqués par
 slug (ré-extraire un profil met à jour sa fiche).
 
+## Prospection (dashboard)
+
+Bouton **Dashboard** dans le popup : une page de l'extension ouverte dans un onglet.
+
+**Campagnes** — une campagne = des *titres visés* (CFO, DAF, Directeur administratif et
+financier…), des *exclusions* (ex-CFO, assistant…) et des filtres LinkedIn :
+
+- **Relations** 1er / 2e / 3e et + (2e par défaut). Hors réseau, LinkedIn masque le nom
+  (« Utilisateur LinkedIn ») et le lien du profil : ces cartes sont comptées, pas enregistrées.
+- **Villes / régions** (texte libre, une par ligne) : seules les personnes dont la
+  localisation affichée contient un de ces noms sont gardées. Par défaut ils sont aussi
+  ajoutés aux mots-clés de la recherche LinkedIn, pour ne pas parcourir tout le pays.
+- **Récupérer depuis mon onglet LinkedIn** : reprend tous les filtres de la recherche de
+  personnes faite à la main dans LinkedIn (lieux, relations, entreprises, secteurs, filtres
+  Premium). Les suggestions à la saisie ont été retirées : l'API de suggestions de LinkedIn
+  répond 400 depuis la nouvelle version du site.
+- **Filtre Titre** : envoie les titres visés dans le champ « Titre » de LinkedIn plutôt que
+  dans les mots-clés libres — seul l'intitulé du poste compte.
+- **Poste actuel obligatoire** (par défaut) : écarte les résultats où LinkedIn indique
+  « Postes précédents », c'est-à-dire que le titre recherché n'est plus leur poste.
+- **Importer les filtres** d'une URL de recherche faite à la main : les filtres connus
+  deviennent des étiquettes, les autres restent tels quels dans « Autres filtres ».
+
+*Lancer la recherche* ouvre la recherche de personnes dans un onglet d'arrière-plan,
+lit chaque page de résultats (10 personnes), passe à la suivante après une pause
+aléatoire, et s'arrête à la dernière page, au nombre de pages max, ou si LinkedIn
+affiche la limite d'utilisation commerciale. Un résultat n'est gardé que si son titre
+contient un des titres visés (mot entier, sans tenir compte des accents ni des
+majuscules) et aucune exclusion.
+
+**Prospects** — table filtrable (texte, campagne, statut), statut modifiable en ligne,
+fiche détaillée (notes, dernier contact, prochaine relance), actions groupées, export
+CSV. *Extraire le profil complet* lance l'extraction existante (historique des postes,
+formations) sur les prospects choisis — chaque profil consomme une consultation.
+
+Retrouver quelqu'un met à jour sa carte sans toucher à son statut, ses notes ni sa
+campagne d'origine.
+
+**Messages** — pour chaque campagne, une séquence : *note d'invitation* (200 caractères
+maximum), *Message 1* (après acceptation), puis des relances avec leur délai en jours.
+Variables : `{{prenom}}`, `{{nom}}`, `{{entreprise}}`, `{{poste}}`, `{{ville}}`. Aperçu avec
+un vrai prospect ; une variable vide est signalée avant l'envoi.
+
+**Aujourd'hui** — la file du jour : relances arrivées à échéance, messages aux relations
+acceptées, invitations (dans la limite du quota quotidien réglé dans *Paramètres*, 20 par
+défaut), invitations en attente d'acceptation. Chaque texte est modifiable avant l'envoi.
+
+L'envoi est **semi-automatique** : *Préparer* ouvre le profil dans un onglet, clique
+« Se connecter » → « Ajouter une note » et remplit la note (ou ouvre la conversation et
+remplit le message), puis s'arrête. Tu relis et cliques « Envoyer » : l'extension le détecte,
+met le statut à jour (Invité, Message envoyé, Relancé), calcule la prochaine relance, ferme
+l'onglet et te ramène au dashboard. Le texte est aussi copié dans le presse-papier ; si la
+page n'a pas pu être préparée, colle-le à la main puis *Marquer comme envoyé*.
+
+**Panneau sur LinkedIn** — sur chaque profil, un panneau en bas à droite indique si la
+personne est dans tes prospects (statut, campagne, prochaine étape) et propose
+*Préparer l'invitation*, *Préparer le message* et *Corriger le statut*, même pour un profil
+ouvert à la main (il est alors ajouté aux prospects). Pendant une préparation :
+*Réessayer*, *Marquer comme envoyé*, *Annuler*, *Copier le diagnostic*. Le panneau se
+réduit en pastille.
+
+Une relation existante n'est reconnue qu'au badge « 1er » du profil : en Premium, le
+bouton « Message » s'affiche aussi pour des non-relations (InMail). Si « Préparer le
+message » tombe sur quelqu'un qui n'est pas en relation, l'invitation avec note est
+préparée à la place.
+
+L'acceptation d'une invitation n'est pas encore détectée : dans *En attente d'acceptation*,
+clique *Invitation acceptée* (ou passe le statut à « Connecté ») pour que le message 1 entre
+dans la file. Une relation déjà existante ou une invitation déjà en attente est reconnue
+sur le profil et le statut est corrigé.
+
+**Notion** (*Paramètres*) — colle le token d'une intégration interne, puis crée la base
+dans une page (colonnes créées automatiquement) ou charge une base existante et
+choisis quelle colonne reçoit chaque champ. La base locale reste la copie de travail :
+
+- tout champ associé est envoyé vers Notion ;
+- *Statut*, *Notes*, *Dernier contact* et *Prochaine relance* sont aussi relus depuis
+  Notion : une modification faite dans Notion revient dans le dashboard ;
+- une ligne ajoutée à la main dans Notion (avec une URL LinkedIn) est importée ;
+- en cas de modification des deux côtés, la plus récente gagne.
+
+La synchro tourne après chaque recherche, toutes les 15 min, et sur le bouton
+*Synchroniser Notion*. La clé de rapprochement est l'URL LinkedIn.
+
 ## Comment ça marche
 
 | Fichier | Rôle |
@@ -35,7 +119,13 @@ slug (ré-extraire un profil met à jour sa fiche).
 | `injected.js` | Monde **MAIN**, `document_start`. Patche `fetch` et `XMLHttpRequest` pour copier chaque réponse `/voyager/api/…` vers le content script via `postMessage`. |
 | `content.js` | Monde **ISOLATED**. Collecte les payloads, lit aussi les blocs `<code id="bpr-guid-…">` du rendu initial, normalise, et retombe sur le DOM si besoin. |
 | `background.js` | Service worker. Cycle de vie des onglets en mode liste, stockage, anti-éviction du worker pendant un batch. |
-| `popup.*` | UI : extraction, liste des résultats, export. |
+| `search.js` | Monde **ISOLATED**, après `content.js` (dont il réutilise les helpers). Lit une page de résultats de recherche : entités Voyager `EntityResultViewModel` si présentes, sinon le DOM. |
+| `db.js` | IndexedDB partagée par le service worker et le dashboard : `prospects` (clé = slug) et `campaigns`. |
+| `notion.js` | Client Notion (débit limité à ~3 req/s, `Retry-After` respecté) et synchro dans les deux sens. |
+| `outreach.js` | Monde **ISOLATED**. Sur l'onglet ouvert par *Préparer* : ouvre l'invitation ou la conversation, remplit le texte, détecte le clic sur « Envoyer ». |
+| `sequence.js` | Séquence partagée dashboard / service worker : modèles, variables, prochaine étape de chaque prospect, changement d'état après un envoi. |
+| `dashboard.*` | Page de l'extension : file du jour, prospects, campagnes, séquences, paramètres. |
+| `popup.*` | UI : extraction, liste des résultats, export, accès au dashboard. |
 
 LinkedIn sert aujourd'hui deux interfaces différentes à la même URL, et
 l'extension gère les deux.
@@ -111,6 +201,12 @@ Le champ `dataSource` de chaque profil indique `voyager` ou `dom`.
   reportés sur chacune.
 - **Profils hors réseau** : LinkedIn masque une partie des informations selon ton
   degré de connexion. L'extension ne voit que ce que ta session voit.
+- **Résultats de recherche** : le parseur DOM de la recherche a été écrit sans accès
+  à LinkedIn et validé sur des pages de test. Si une recherche rend 0 résultat alors que
+  LinkedIn en affiche, ouvre la page de recherche, clique *Diagnostic* dans le popup et
+  partage le rapport.
+- **Photos** : les URL d'images LinkedIn sont signées et expirent au bout de quelques
+  semaines ; une nouvelle recherche ou extraction les rafraîchit.
 - **Quota de consultations** : LinkedIn limite le nombre de profils consultés par
   jour, plus strictement sur un compte gratuit.
 

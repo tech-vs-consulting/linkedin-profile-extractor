@@ -249,18 +249,23 @@ $('clear').addEventListener('click', async () => {
   await render();
 });
 
-// A batch keeps running after the popup closes; pick the progress back up.
+$('open-dashboard').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+});
+
+// A job keeps running after the popup closes; pick the progress back up.
+const progress = ({ label, done, total }) => `${label ?? 'Traitement'} : ${done + 1}/${total}...`;
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'LPE_STATUS') return;
-  const { running, done, total } = message.status;
-  if (running) notify(`Profil ${done + 1}/${total}...`);
+  if (message.status.running) notify(progress(message.status));
   render();
 });
 
 chrome.storage.local.get('status').then(({ status }) => {
   if (status?.running) {
     els.runBatch.disabled = true;
-    notify(`Traitement en cours : ${status.done}/${status.total}...`);
+    notify(progress(status));
   }
 });
 

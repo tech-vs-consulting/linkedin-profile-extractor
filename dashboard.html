@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prospection LinkedIn</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <header class="top">
+      <h1>Prospection LinkedIn</h1>
+      <nav class="tabs">
+        <button class="tab is-active" data-tab="today">Aujourd'hui</button>
+        <button class="tab" data-tab="prospects">Prospects</button>
+        <button class="tab" data-tab="campaigns">Campagnes</button>
+        <button class="tab" data-tab="messages">Messages</button>
+        <button class="tab" data-tab="settings">Paramètres</button>
+      </nav>
+      <div class="sync">
+        <span id="sync-info" class="muted"></span>
+        <button id="sync-now">Synchroniser Notion</button>
+      </div>
+    </header>
+
+    <div id="job" class="job is-hidden">
+      <span id="job-label"></span>
+      <progress id="job-progress" max="1" value="0"></progress>
+      <span id="job-detail" class="muted"></span>
+      <button id="job-stop">Arrêter</button>
+    </div>
+
+    <p id="message" class="message is-hidden"></p>
+
+    <main>
+      <!-- Today -->
+      <section id="panel-today" class="panel">
+        <div class="toolbar">
+          <div id="today-summary" class="chips"></div>
+          <span class="spacer"></span>
+          <button id="today-diagnostic" class="link is-hidden">Copier le dernier diagnostic</button>
+          <select id="today-campaign"></select>
+        </div>
+        <p class="hint">
+          « Préparer » ouvre le profil sur LinkedIn et pré-remplit le texte (il est aussi copié dans
+          ton presse-papier). Tu relis, tu cliques « Envoyer » : le statut se met à jour et tu
+          reviens ici.
+        </p>
+        <div id="today-sections"></div>
+      </section>
+
+      <!-- Prospects -->
+      <section id="panel-prospects" class="panel is-hidden">
+        <div id="status-chips" class="chips"></div>
+
+        <div class="toolbar">
+          <input type="search" id="filter-text" placeholder="Nom, titre, entreprise, ville…" />
+          <select id="filter-campaign"></select>
+          <select id="filter-region"></select>
+          <select id="filter-status"></select>
+          <span class="spacer"></span>
+          <button id="export-csv">Export CSV</button>
+        </div>
+
+        <div id="bulk" class="bulk is-hidden">
+          <strong id="selected-count"></strong>
+          <select id="bulk-status"></select>
+          <button id="bulk-enrich">Enrichir le profil complet</button>
+          <button id="bulk-delete" class="danger">Supprimer</button>
+          <button id="bulk-clear" class="link">Désélectionner</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="check-all" /></th>
+                <th>Prospect</th>
+                <th>Entreprise</th>
+                <th>Localisation</th>
+                <th>Campagne</th>
+                <th>Statut</th>
+                <th>Trouvé le</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <p id="empty" class="empty is-hidden"></p>
+        </div>
+        <button id="more" class="more is-hidden">Afficher plus</button>
+      </section>
+
+      <!-- Campaigns -->
+      <section id="panel-campaigns" class="panel is-hidden">
+        <div class="split">
+          <div>
+            <div class="section-head">
+              <h2>Campagnes</h2>
+              <button id="campaign-new" class="primary">Nouvelle campagne</button>
+            </div>
+            <div id="campaign-list" class="campaign-list"></div>
+          </div>
+
+          <form id="campaign-form" class="card form is-hidden" autocomplete="off">
+            <h2 id="campaign-form-title">Nouvelle campagne</h2>
+            <input type="hidden" id="c-id" />
+
+            <label>Nom
+              <input id="c-name" required placeholder="CFO Île-de-France" />
+            </label>
+
+            <div class="row">
+              <label>Titres visés <small>un par ligne</small>
+                <textarea id="c-terms" rows="7" placeholder="CFO&#10;DAF&#10;Directeur administratif et financier&#10;Directrice administrative et financière&#10;Head of Finance&#10;VP Finance"></textarea>
+              </label>
+              <label>Exclusions <small>un par ligne</small>
+                <textarea id="c-exclusions" rows="7" placeholder="ex-CFO&#10;assistant&#10;assistante&#10;stagiaire&#10;alternant&#10;fractional&#10;freelance"></textarea>
+              </label>
+            </div>
+            <p class="hint">
+              Un résultat n'est gardé que si son titre contient un des titres visés et aucune
+              exclusion. Majuscules et accents sont ignorés.
+            </p>
+
+            <label class="check">
+              <input type="checkbox" id="c-require-current" checked />
+              Poste actuel obligatoire : écarter les résultats où LinkedIn indique « Postes
+              précédents » (le titre recherché n'est plus leur poste)
+            </label>
+
+            <fieldset class="filters">
+              <legend>Filtres LinkedIn</legend>
+
+              <div class="field">
+                <span class="field-label">Villes / régions <small>une par ligne</small></span>
+                <div class="stack">
+                  <textarea id="c-places" rows="3" placeholder="Lille&#10;Hauts-de-France"></textarea>
+                  <label class="check">
+                    <input type="checkbox" id="c-places-kw" checked />
+                    Les ajouter aussi aux mots-clés LinkedIn (évite de parcourir tout le pays)
+                  </label>
+                  <p class="hint">
+                    Tape le nom tel qu'il apparaît sur les profils. Seules les personnes dont la
+                    localisation contient un de ces noms sont gardées (accents et majuscules ignorés).
+                  </p>
+                </div>
+              </div>
+
+              <div class="from-tab">
+                <button type="button" id="c-from-tab">Récupérer depuis mon onglet LinkedIn</button>
+                <p id="c-from-tab-status" class="hint is-hidden"></p>
+                <p class="hint">
+                  Fais ta recherche de personnes sur LinkedIn avec ses filtres (Lieux, Relations,
+                  Entreprises, Tous les filtres…), puis clique ici : tous les filtres de cet onglet
+                  sont repris dans la campagne.
+                </p>
+              </div>
+
+              <div class="field">
+                <span class="field-label">Relations</span>
+                <span class="checks">
+                  <label class="check"><input type="checkbox" name="c-network" value="F" /> 1er</label>
+                  <label class="check"><input type="checkbox" name="c-network" value="S" /> 2e</label>
+                  <label class="check"><input type="checkbox" name="c-network" value="O" /> 3e et +</label>
+                </span>
+              </div>
+              <p class="hint">
+                Hors de ton réseau, LinkedIn masque le nom (« Utilisateur LinkedIn ») et le lien du
+                profil : ces personnes ne sont pas enregistrées. Le 2e niveau n'en contient pas.
+              </p>
+
+              <div class="field">
+                <span class="field-label">Lieux</span>
+                <div class="picker" id="p-geo" data-kind="geo" data-placeholder="Ville, région, pays…"></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Entreprises actuelles</span>
+                <div class="picker" id="p-current" data-kind="company" data-placeholder="Nom d'entreprise…"></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Anciennes entreprises</span>
+                <div class="picker" id="p-past" data-kind="company" data-placeholder="Nom d'entreprise…"></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Secteurs</span>
+                <div class="picker" id="p-industry" data-kind="industry" data-placeholder="Secteur…"></div>
+              </div>
+              <p class="hint">
+                Ces filtres (codes LinkedIn) viennent de « Récupérer depuis mon onglet LinkedIn » ou
+                d'une URL importée. La croix retire une valeur.
+              </p>
+
+              <label class="check">
+                <input type="checkbox" id="c-title-filter" />
+                Chercher les titres visés dans le champ « Titre » de LinkedIn (plus précis que les
+                mots-clés : seul l'intitulé du poste compte)
+              </label>
+
+              <label>Mots-clés envoyés à LinkedIn
+                <small id="c-keywords-hint">vide = générés depuis les titres</small>
+                <input id="c-keywords" />
+              </label>
+            </fieldset>
+
+            <label>Importer les filtres d'une recherche LinkedIn <small>optionnel</small>
+              <span class="inline">
+                <input id="c-import-url" placeholder="https://www.linkedin.com/search/results/people/?keywords=…&amp;geoUrn=…" />
+                <button type="button" id="c-import">Importer</button>
+              </span>
+            </label>
+            <p class="hint">
+              Pour reprendre une recherche faite à la main sur LinkedIn : copie son URL et colle-la
+              ici. Les filtres que ce formulaire ne connaît pas vont dans « Autres filtres ».
+            </p>
+
+            <label>Autres filtres LinkedIn <small>importés, format URL</small>
+              <input id="c-extra" placeholder="network=%5B%22S%22%2C%22O%22%5D" />
+            </label>
+
+            <div class="row">
+              <label>Pages max <small>10 résultats par page</small>
+                <input id="c-pages" type="number" min="1" max="1000" value="10" />
+              </label>
+              <label>Pause entre pages
+                <select id="c-delay">
+                  <option value="10000">10 s</option>
+                  <option value="15000" selected>15 s</option>
+                  <option value="25000">25 s</option>
+                  <option value="40000">40 s</option>
+                </select>
+              </label>
+            </div>
+
+            <p class="hint">URL générée : <a id="c-preview" target="_blank" rel="noopener"></a></p>
+
+            <div class="actions">
+              <button type="submit" class="primary">Enregistrer</button>
+              <button type="button" id="c-save-run">Enregistrer et lancer</button>
+              <span class="spacer"></span>
+              <button type="button" id="c-cancel" class="link">Annuler</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Messages -->
+      <section id="panel-messages" class="panel is-hidden">
+        <div class="split">
+          <div class="card form">
+            <label>Campagne
+              <select id="seq-campaign"></select>
+            </label>
+            <div id="seq-editor" class="form"></div>
+            <div class="actions">
+              <button type="button" id="seq-add">Ajouter une relance</button>
+              <span class="spacer"></span>
+              <button type="button" id="seq-defaults" class="link">Remettre les modèles par défaut</button>
+              <button type="button" id="seq-save" class="primary">Enregistrer</button>
+            </div>
+          </div>
+          <div class="card form">
+            <h2>Aperçu</h2>
+            <label>Avec le prospect
+              <select id="seq-preview-prospect"></select>
+            </label>
+            <div id="seq-preview"></div>
+            <h3>Variables</h3>
+            <ul id="seq-variables" class="steps"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="panel-settings" class="panel is-hidden">
+        <div class="card form narrow">
+          <h2>Notion</h2>
+          <ol class="steps">
+            <li>Crée une intégration interne sur
+              <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener">notion.so/profile/integrations</a>
+              et copie son token.</li>
+            <li>Dans Notion, ouvre la page qui accueillera la base (ou la base existante) → menu
+              <strong>•••</strong> → <strong>Connexions</strong> → ajoute ton intégration.</li>
+            <li>Colle le token ci-dessous, puis crée ou charge la base.</li>
+          </ol>
+
+          <label>Token de l'intégration
+            <span class="inline">
+              <input id="n-token" type="password" placeholder="ntn_… ou secret_…" />
+              <button type="button" id="n-test">Tester</button>
+            </span>
+          </label>
+
+          <div class="row">
+            <label>Créer une base dans cette page
+              <span class="inline">
+                <input id="n-page" placeholder="URL de la page Notion" />
+                <button type="button" id="n-create">Créer</button>
+              </span>
+            </label>
+            <label>… ou utiliser une base existante
+              <span class="inline">
+                <input id="n-database" placeholder="URL de la base Notion" />
+                <button type="button" id="n-load">Charger</button>
+              </span>
+            </label>
+          </div>
+
+          <div id="n-mapping-block" class="is-hidden">
+            <h3>Base : <span id="n-db-title"></span></h3>
+            <p class="hint">Colonne Notion utilisée pour chaque champ. « — » = non synchronisé.
+              ⇄ = modifiable dans Notion et relu par l'extension.</p>
+            <table class="mapping">
+              <tbody id="n-mapping"></tbody>
+            </table>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="n-auto" checked />
+            Synchroniser automatiquement (après chaque recherche et toutes les 15 min)
+          </label>
+
+          <div class="actions">
+            <button type="button" id="n-save" class="primary">Enregistrer</button>
+            <span id="n-state" class="muted"></span>
+          </div>
+        </div>
+
+        <div class="card form narrow">
+          <h2>Prospection</h2>
+          <div class="row">
+            <label>Invitations par jour
+              <input id="o-quota" type="number" min="1" max="100" value="20" />
+            </label>
+            <span class="spacer"></span>
+          </div>
+          <p class="hint">
+            LinkedIn limite les invitations à environ 100 à 200 par semaine, moins sur un compte
+            récent. La file « Aujourd'hui » ne propose pas plus que ce quota.
+          </p>
+          <div class="actions">
+            <button type="button" id="o-save" class="primary">Enregistrer</button>
+          </div>
+        </div>
+
+        <div class="card form narrow">
+          <h2>Données</h2>
+          <p class="hint">Les prospects sont stockés dans ce navigateur (IndexedDB) et, si
+            configuré, recopiés dans Notion.</p>
+          <div class="actions">
+            <button type="button" id="d-export">Exporter tout (JSON)</button>
+            <button type="button" id="d-wipe" class="danger">Supprimer tous les prospects</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside id="drawer" class="drawer is-hidden" aria-label="Fiche prospect">
+      <div id="drawer-body"></div>
+    </aside>
+
+    <script type="module" src="dashboard.js"></script>
+  </body>
+</html>

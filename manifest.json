@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Profile Extractor",
-  "version": "1.0.0",
-  "description": "Extrait nom, photo, titre, entreprise et historique de postes depuis une page de profil LinkedIn.",
+  "version": "1.2.0",
+  "description": "Recherche de prospects LinkedIn par campagne, extraction de profils, dashboard et synchronisation Notion.",
   "minimum_chrome_version": "111",
-  "permissions": ["tabs", "storage", "scripting"],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "permissions": ["tabs", "storage", "scripting", "alarms", "unlimitedStorage"],
+  "host_permissions": ["https://www.linkedin.com/*", "https://api.notion.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -23,7 +23,7 @@
     },
     {
       "matches": ["https://www.linkedin.com/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "search.js", "outreach.js"],
       "run_at": "document_idle",
       "world": "ISOLATED"
     }

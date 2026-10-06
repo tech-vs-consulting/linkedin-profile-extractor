@@ -648,6 +648,23 @@ function topCardInfo(name) {
   return { headline, location };
 }
 
+// The biggest profile portrait in the card that holds the name heading, when
+// rendered at a real size (the mutual-connection avatars are tiny).
+function topCardPortrait(name) {
+  const main = document.querySelector('main');
+  if (!main || !name) return null;
+  const heading = [...main.querySelectorAll('h1, h2')].find((h) => clean(h.textContent) === name);
+  // Climb from the heading to the first block holding a full-size portrait.
+  for (let card = heading?.parentElement, depth = 0; card && depth < 12; card = card.parentElement, depth += 1) {
+    const portraits = [...card.querySelectorAll('img[src*="profile-displayphoto"]')]
+      .map((img) => ({ src: img.currentSrc || img.src, width: img.getBoundingClientRect().width }))
+      .filter((p) => p.width >= 60)
+      .sort((a, b) => b.width - a.width);
+    if (portraits.length) return portraits[0].src;
+  }
+  return null;
+}
+
 function domBasics() {
   const name =
     clean(document.querySelector('main h1')?.textContent) ||
@@ -660,11 +677,13 @@ function domBasics() {
     clean(document.querySelector('.text-body-medium.break-words')?.textContent) ||
     card.headline;
 
+  // Ember classes first; the React profile has none, so there take the
+  // largest portrait of the person's own card (never one from the navigation
+  // bar, which shows the viewer's face, nor a mutual connection's avatar).
   const photoSelectors = [
     'main img.pv-top-card-profile-picture__image--show',
     'img.pv-top-card-profile-picture__image--show',
     'img.profile-photo-edit__preview',
-    'button[aria-label*="photo" i] img',
   ];
 
   let photo = null;
@@ -675,6 +694,7 @@ function domBasics() {
       break;
     }
   }
+  if (!photo) photo = topCardPortrait(name);
 
   // Last resort: the first CDN-hosted portrait whose alt text is the name.
   if (!photo && name) {
